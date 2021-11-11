@@ -119,12 +119,12 @@ public class Simulation : MonoBehaviour {
             float y = Random.Range(1, height);
             drop.position = new Vector2(x, y);
 
-            float speed = 0.5f;
+            float speed = 5.0f;
             float xVel = Mathf.Cos(rainAngle) * speed;
             float yVel = Mathf.Sin(rainAngle) * speed;
 
             drop.velocity = new Vector2(xVel, yVel);
-            drop.mass = 1.0f;
+            drop.mass = 10f;
             rain[i] = drop;
         }
 

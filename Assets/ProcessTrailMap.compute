@@ -24,7 +24,7 @@ int width;
 int height;
 
 static const float PI = 3.14159265f;
-static const float g = 0.98f;
+static const float g = 0.098f;
 
 float random (float2 st) {
     return frac(sin(dot(st.xy, float2(12.9898,78.233)))*43758.5453123);
@@ -32,6 +32,19 @@ float random (float2 st) {
 
 float sigmoid(float x) {
     return 1.0 / (1 + exp(-x));
+}
+
+
+//Add the velocity to the drop at index (x,y)
+void addVel(int x, int y, float2 vel) {
+    float4 drop = nextDataMap[int2(x, y)];
+    nextDataMap[int2(x, y)] = float4(drop.x + vel.x, drop.y + vel.y, drop.z, 0.0);
+}
+
+//Add mass to the drop at index (x, y)
+void addMass(int x, int y, float mass) {
+    float4 drop = nextDataMap[int2(x, y)];
+    nextDataMap[int2(x,y)] = float4(drop.x, drop.y, drop.z + mass, 0.0);
 }
 
 [numthreads(8,8,1)]
@@ -59,41 +72,50 @@ void Update(uint3 id  : SV_DispatchThreadID) {
     if (m == 0) {
         return;
     }
-
+    
     float2 vel = float2(drop.x, drop.y); //momentum of drop
     float2 gravity = float2(0, m * g); //gravity
-
+    
     float mu = noiseMap[id.xy]; //coefficient of friction
-    //float2 dynamicFriction = float2(-vel.x * mu, -vel.y * mu); //dynamic friction
-    //float2 staticFriction = float2(0, -g*m*mu); //dynamic friction
+    float2 friction = float2(-vel.x * mu * m, - vel.y * mu * m);
 
-    float2 newDir = vel + gravity;
+    float2 newDir = vel + gravity + friction;
+
     float speed = sqrt(pow(newDir.x, 2) + pow(newDir.y, 2));
 
-    //float massChange = m * sigmoid(speed);
+    float angle = atan2(newDir.y, newDir.x);
+    float massChange = m * 0.9;
 
 
+    //find node to move to
     float maxScore = 0;
     float maxI = 0;
     for (int i = -1; i < 2; i++) {
         if (id.x + i >= 0 && id.x + i < width && id.y > 0) {
-            float score = noiseMap[int2(id.x + i, id.y - 1)].z;
+            //Bias score by least resistive path
+            float score = noiseMap[int2(id.x + i, id.y - 1)].x;
+
+            //Bias towards path with water
+            score += nextDataMap[int2(id.x + maxI, id.y - 1)].z * 5;
+
+            //Choose routes in line with momentum
+            score += abs(angle - atan2(1, i))*0.5;
+
             if (score >= maxScore) {
                 maxScore = score;
                 maxI = i;
             }
         }
     }
-
-    if (m <= 0.1) {
-        nextDataMap[id.xy] = float4(newDir.x, newDir.y, m * 0.1, 0.0);
-    }
-    if (id.x + maxI >= 0 && id.x + maxI < width && id.y > 0) {
-        float oldM = nextDataMap[id.xy].z;
-        nextDataMap[id.xy] = float4(newDir.x, newDir.y, m * 0.1, 0.0);
-
-        oldM = nextDataMap[int2(id.x + maxI, id.y - 1)].z;
-        nextDataMap[int2(id.x + maxI, id.y - 1)] = float4(newDir.x, newDir.y, oldM + m, 0.0);
+    if (speed < 0.0) {
+        addMass(id.x, id.y, m);
+    }else{
+        //set nextDataMap
+        if (id.x + maxI >= 0 && id.x + maxI < width && id.y > 0) {
+            addMass(id.x, id.y, m * 0.01);
+            addVel(id.x, id.y, -vel);
+            addMass(id.x + maxI, id.y - 1, m * 0.99);
+        }
     }
 }
 
