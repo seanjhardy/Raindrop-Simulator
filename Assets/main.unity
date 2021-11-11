@@ -232,8 +232,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   canvas: {fileID: 235580251}
   image: {fileID: 84890172}
-  noise: {fileID: 2800000, guid: 74d4fd412e4fddc47bd6f8e17e8b534e, type: 3}
   shader: {fileID: 7200000, guid: e77afb065ac63df49956c9ea9e0ec4ac, type: 3}
+  delay: 0
 --- !u!1 &235580251
 GameObject:
   m_ObjectHideFlags: 0

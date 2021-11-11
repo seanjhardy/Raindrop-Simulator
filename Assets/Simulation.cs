@@ -59,7 +59,7 @@ public class Simulation : MonoBehaviour {
         maps[0] = map;
         maps[1] = map2;
 
-        image.texture = noise;
+        image.texture = viewMap;
     }
 
 

@@ -24,6 +24,7 @@ int width;
 int height;
 
 static const float PI = 3.14159265f;
+static const float g = 0.98f;
 
 float random (float2 st) {
     return frac(sin(dot(st.xy, float2(12.9898,78.233)))*43758.5453123);
@@ -53,46 +54,46 @@ void Update(uint3 id  : SV_DispatchThreadID) {
     }
 
     float4 drop = dataMap[id.xy];
-    float g = 0.98f;
     float m = drop.z; //mass of drop
 
-    if (m > 0) {
-        float2 vel = float2(drop.x, drop.y); //momentum of drop
-        float2 gravity = float2(0, m * g); //gravity
+    if (m == 0) {
+        return;
+    }
 
-        float mu = noiseMap[id.xy]; //coefficient of friction
-        float2 dynamicFriction = float2(-vel.x * mu, -vel.y * mu); //dynamic friction
-        float2 staticFriction = float2(0, -g*m*mu); //dynamic friction
+    float2 vel = float2(drop.x, drop.y); //momentum of drop
+    float2 gravity = float2(0, m * g); //gravity
 
-        float2 newDir = vel + gravity;// +staticFriction + dynamicFriction;
-        float speed = sqrt(pow(newDir.x, 2) + pow(newDir.y, 2));
+    float mu = noiseMap[id.xy]; //coefficient of friction
+    //float2 dynamicFriction = float2(-vel.x * mu, -vel.y * mu); //dynamic friction
+    //float2 staticFriction = float2(0, -g*m*mu); //dynamic friction
 
-        float massChange = m * sigmoid(speed);
+    float2 newDir = vel + gravity;
+    float speed = sqrt(pow(newDir.x, 2) + pow(newDir.y, 2));
+
+    //float massChange = m * sigmoid(speed);
 
 
-        float maxScore = 0;
-        float maxI = 0;
-        for (int i = -1; i < 2; i++) {
-            if (id.x + i >= 0 && id.x + i < width && id.y > 0) {
-                float newM = massChange * noiseMap[int2(id.x + i, id.y - 1)].z;
-                float score;
-                if (score >= maxScore) {
-                    maxScore = score;
-                    maxI = i;
-                }
-            }
-        }
-
+    float maxScore = 0;
+    float maxI = 0;
+    for (int i = -1; i < 2; i++) {
         if (id.x + i >= 0 && id.x + i < width && id.y > 0) {
-            if (newM > 0) {
-                //+ noiseMap[int2(id.x + i, id.y - 1)]*0.5
-                float oldM = nextDataMap[int2(id.x + i, id.y - 1)].z;
-                nextDataMap[int2(id.x + i, id.y - 1)] = float4(newDir.x, newDir.y, oldM + massChange, 0.0);
+            float score = noiseMap[int2(id.x + i, id.y - 1)].z;
+            if (score >= maxScore) {
+                maxScore = score;
+                maxI = i;
             }
         }
-        //float oldM = nextDataMap[id.xy].z;
-        //nextDataMap[id.xy] = float4(newDir.x * 0.5, newDir.y * 0.5, oldM, 0.0);
+    }
 
+    if (m <= 0.1) {
+        nextDataMap[id.xy] = float4(newDir.x, newDir.y, m * 0.1, 0.0);
+    }
+    if (id.x + maxI >= 0 && id.x + maxI < width && id.y > 0) {
+        float oldM = nextDataMap[id.xy].z;
+        nextDataMap[id.xy] = float4(newDir.x, newDir.y, m * 0.1, 0.0);
+
+        oldM = nextDataMap[int2(id.x + maxI, id.y - 1)].z;
+        nextDataMap[int2(id.x + maxI, id.y - 1)] = float4(newDir.x, newDir.y, oldM + m, 0.0);
     }
 }
 
