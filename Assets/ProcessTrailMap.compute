@@ -1,0 +1,117 @@
+// Each #kernel tells which function to compile; you can have many kernels
+#pragma kernel Update
+#pragma kernel DrawBlack
+#pragma kernel AddRain
+#pragma kernel Draw
+#pragma kernel ResetMap
+
+struct Raindrop{
+    float2 pos;
+    float2 vel;
+    float mass;
+};
+
+// Create a RenderTexture with enableRandomWrite flag and set it
+// with cs.SetTexture
+RWStructuredBuffer<Raindrop> rain;
+RWTexture2D<float4> dataMap;
+RWTexture2D<float4> nextDataMap; 
+RWTexture2D<float4> viewMap;
+RWTexture2D<float4> noiseMap;
+
+int numDrops;
+int width;
+int height;
+
+static const float PI = 3.14159265f;
+
+float random (float2 st) {
+    return frac(sin(dot(st.xy, float2(12.9898,78.233)))*43758.5453123);
+}
+
+float sigmoid(float x) {
+    return 1.0 / (1 + exp(-x));
+}
+
+[numthreads(8,8,1)]
+void DrawBlack (uint3 id : SV_DispatchThreadID){
+    viewMap[id.xy] = float4(0, 0, 0, 1.0);
+}
+
+[numthreads(1, 1, 1)]
+void AddRain(uint3 id : SV_DispatchThreadID) {
+    Raindrop drop = rain[id.x];
+
+    dataMap[drop.pos] = float4(drop.vel.x, drop.vel.y, drop.mass, 0.0);
+}
+
+
+[numthreads(16,16,1)]
+void Update(uint3 id  : SV_DispatchThreadID) {
+    if (id.x < 0 || id.x >= width || id.y < 0 || id.y >= height) {
+        return;
+    }
+
+    float4 drop = dataMap[id.xy];
+    float g = 0.98f;
+    float m = drop.z; //mass of drop
+
+    if (m > 0) {
+        float2 vel = float2(drop.x, drop.y); //momentum of drop
+        float2 gravity = float2(0, m * g); //gravity
+
+        float mu = noiseMap[id.xy]; //coefficient of friction
+        float2 dynamicFriction = float2(-vel.x * mu, -vel.y * mu); //dynamic friction
+        float2 staticFriction = float2(0, -g*m*mu); //dynamic friction
+
+        float2 newDir = vel + gravity;// +staticFriction + dynamicFriction;
+        float speed = sqrt(pow(newDir.x, 2) + pow(newDir.y, 2));
+
+        float massChange = m * sigmoid(speed);
+
+
+        float maxScore = 0;
+        float maxI = 0;
+        for (int i = -1; i < 2; i++) {
+            if (id.x + i >= 0 && id.x + i < width && id.y > 0) {
+                float newM = massChange * noiseMap[int2(id.x + i, id.y - 1)].z;
+                float score;
+                if (score >= maxScore) {
+                    maxScore = score;
+                    maxI = i;
+                }
+            }
+        }
+
+        if (id.x + i >= 0 && id.x + i < width && id.y > 0) {
+            if (newM > 0) {
+                //+ noiseMap[int2(id.x + i, id.y - 1)]*0.5
+                float oldM = nextDataMap[int2(id.x + i, id.y - 1)].z;
+                nextDataMap[int2(id.x + i, id.y - 1)] = float4(newDir.x, newDir.y, oldM + massChange, 0.0);
+            }
+        }
+        //float oldM = nextDataMap[id.xy].z;
+        //nextDataMap[id.xy] = float4(newDir.x * 0.5, newDir.y * 0.5, oldM, 0.0);
+
+    }
+}
+
+[numthreads(16, 16, 1)]
+void Draw(uint3 id  : SV_DispatchThreadID) {
+    if (id.x < 0 || id.x >= width || id.y < 0 || id.y >= height) {
+        return;
+    }
+    
+    float a = nextDataMap[id.xy].z;
+    viewMap[id.xy] = float4(a, a, a, 1.0);
+}
+
+[numthreads(16, 16, 1)]
+void ResetMap(uint3 id  : SV_DispatchThreadID) {
+    if (id.x < 0 || id.x >= width || id.y < 0 || id.y >= height) {
+        return;
+    }
+
+    dataMap[id.xy] = float4(0, 0, 0, 0);
+}
+
