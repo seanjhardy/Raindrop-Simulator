@@ -3,8 +3,7 @@ using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
 
-public class Simulation : MonoBehaviour
-{
+public class Simulation : MonoBehaviour {
     public GameObject canvas;
     public RawImage image;
     public ComputeShader shader;
@@ -14,6 +13,7 @@ public class Simulation : MonoBehaviour
     private int step;
     public float delay = 0.5F;
     private float lastTime = 0f;
+    private float[] debugVals = new float[2];
 
     private RenderTexture noise;
 
@@ -23,8 +23,7 @@ public class Simulation : MonoBehaviour
     private uint curTex = 0;
     private uint prevTex = 1;
 
-    struct Raindrop
-    {
+    struct Raindrop {
         public Vector2 position;
         public Vector2 velocity;
         public float mass;
@@ -33,8 +32,7 @@ public class Simulation : MonoBehaviour
     private ComputeBuffer computeBuffer;
 
     // Start is called before the first frame update
-    void Start()
-    {
+    void Start() {
         width = 640;//640, 128
         height = 360;//360, 72
 
@@ -57,7 +55,6 @@ public class Simulation : MonoBehaviour
         viewMap.enableRandomWrite = true;
         viewMap.Create();
         viewMap.filterMode = FilterMode.Point;
-        drawBlack();
 
         maps = new RenderTexture[2];
         maps[0] = map;
@@ -68,41 +65,43 @@ public class Simulation : MonoBehaviour
 
 
     // Update is called once per frame
-    void Update(){
+    void Update() {
         if (Time.time - lastTime >= delay){
             lastTime = Time.time;
             step += 1;
 
             prevTex = curTex;
             curTex = (curTex + 1) % numTex;
+            drawBlack();
             addRain();
             simulateStep();
             draw();
             resetPrevDataMap();
 
+            if (step % 20 == 0) {
+                Debug.Log(debugVals[0] + " " + debugVals[1]);
+            }
+
             image.texture = viewMap;
         }
     }
 
-    void drawBlack()
-    {
+    void drawBlack() {
         int kernelHandle = shader.FindKernel("DrawBlack");
 
         shader.SetTexture(kernelHandle, "viewMap", viewMap);
         shader.Dispatch(kernelHandle, width / 16, height / 16, 1);
     }
 
-    void draw()
-    {
+    void draw() {
         int kernelHandle = shader.FindKernel("Draw");
 
         shader.SetTexture(kernelHandle, "viewMap", viewMap);
-        shader.SetTexture(kernelHandle, "nextDataMap", maps[curTex]);
+        shader.SetTexture(kernelHandle, "nextDataMap", maps[curTex]); 
         shader.Dispatch(kernelHandle, width / 16, height / 16, 1);
     }
 
-    void resetPrevDataMap()
-    {
+    void resetPrevDataMap() {
         int kernelHandle = shader.FindKernel("ResetMap");
 
         shader.SetTexture(kernelHandle, "dataMap", maps[prevTex]);
@@ -110,29 +109,27 @@ public class Simulation : MonoBehaviour
     }
 
 
-    void addRain()
-    {
+    void addRain() {
         int kernelHandle = shader.FindKernel("AddRain");
         shader.SetFloat("deltaTime", Time.deltaTime);
 
         int numDrops = 2;
         Raindrop[] rain = new Raindrop[numDrops];
 
-        float rainAngle = (float)(Mathf.PI * 0.5f + Mathf.Sin(step * 0.05f) / 8.0f);
+        float rainAngle = -Mathf.PI/2.0f;// (float)(Mathf.PI * 0.5f + Mathf.Sin(step * 0.05f) / 8.0f);
 
-        for (int i = 0; i < numDrops; i++)
-        {
+        for (int i = 0; i < numDrops; i++) {
             Raindrop drop = new Raindrop();
             float x = Random.Range(1, width);
             float y = Random.Range(1, height);
             drop.position = new Vector2(x, y);
 
-            float speed = 1.0f;
+            float speed = Random.Range(1, 10)*0.2f;
             float xVel = Mathf.Cos(rainAngle) * speed;
             float yVel = Mathf.Sin(rainAngle) * speed;
 
             drop.velocity = new Vector2(xVel, yVel);
-            drop.mass = 10.0f;
+            drop.mass = 1.0f;
             rain[i] = drop;
         }
 
@@ -145,24 +142,26 @@ public class Simulation : MonoBehaviour
         computeBuffer.Release();
     }
 
-    void simulateStep()
-    {
+    void simulateStep() {
         int kernelHandle = shader.FindKernel("Update");
         shader.SetFloat("deltaTime", Time.deltaTime);
 
-        shader.SetInt("step", step);
         shader.SetTexture(kernelHandle, "dataMap", maps[prevTex]);
         shader.SetTexture(kernelHandle, "nextDataMap", maps[curTex]);
         shader.SetTexture(kernelHandle, "viewMap", viewMap);
         shader.SetTexture(kernelHandle, "noiseMap", noise);
+        computeBuffer = new ComputeBuffer(debugVals.Length, sizeof(float));
+        computeBuffer.SetData(debugVals);
+        shader.SetBuffer(kernelHandle, "debugVals", computeBuffer);
 
         shader.Dispatch(kernelHandle, width / 16, height / 16, 1);
+        computeBuffer.GetData(debugVals);
+        computeBuffer.Release();
     }
 
-    void generateNoise()
-    {
+    void generateNoise() {
         float[] octaveFrequencies = new float[] { 0.01f, 0.05f, 0.2f, 2f, 5f };
-        float[] octaveAmplitudes = new float[] { 2.0f, 1.0f, 0.6f, 0.4f, 0.2f };
+        float[] octaveAmplitudes = new float[] { 2.0f,  1.0f, 0.6f, 0.4f, 0.2f };
 
         Texture2D noiseTex = new Texture2D(width, height);
 
@@ -170,15 +169,13 @@ public class Simulation : MonoBehaviour
         Color[] tex = noiseTex.GetPixels();
         float max = 0;
         float min = 10;
-        for (var i = 0; i < tex.Length; ++i)
-        {
+        for (var i = 0; i < tex.Length; ++i){
             tex[i] = fillColor;
 
             int x = i % width;
             int y = i / width;
 
-            for (int j = 0; j < octaveFrequencies.Length; j++)
-            {
+            for (int j = 0; j < octaveFrequencies.Length; j++){
                 float z = octaveAmplitudes[j] * Mathf.PerlinNoise(
                         octaveFrequencies[j] * x + .3f,
                         octaveFrequencies[j] * y + .3f) * 0.5f;
@@ -191,8 +188,7 @@ public class Simulation : MonoBehaviour
             min = Mathf.Min(min, tex[i].r);
         }
 
-        for (var i = 0; i < tex.Length; ++i)
-        {
+        for (var i = 0; i < tex.Length; ++i){
             float c = (tex[i].r - min) * (1.0f / (max - min));
             tex[i] = new Color(c, c, c, 1.0f);
         }
