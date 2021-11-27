@@ -4,8 +4,9 @@
 #pragma kernel AddRain
 #pragma kernel Draw
 #pragma kernel ResetMap
+#pragma kernel Blur
 
-struct Raindrop{
+struct Raindrop {
     float2 pos;
     float2 vel;
     float mass;
@@ -15,25 +16,28 @@ struct Raindrop{
 // with cs.SetTexture
 RWStructuredBuffer<Raindrop> rain;
 RWTexture2D<float4> dataMap;
-RWTexture2D<float4> nextDataMap; 
+RWTexture2D<float4> nextDataMap;
 RWTexture2D<float4> viewMap;
 RWTexture2D<float4> noiseMap;
+RWStructuredBuffer<float> debugVals;
 
+RWTexture2D<float4> bg, blurBg;
 int numDrops;
 int width;
 int height;
-RWStructuredBuffer<float> debugVals;
+int step;
 
 static const float PI = 3.14159265f;
-static const float g = 0.1f;
+static const float g = -0.1f;
 
-float random (float2 st) {
-    return frac(sin(dot(st.xy, float2(12.9898,78.233)))*43758.5453123);
+float random(float2 st) {
+    return frac(sin(dot(st.xy, float2(12.9898, 78.233))) * 43758.5453123);
 }
 
 float sigmoid(float x) {
     return 1.0 / (1 + exp(-x));
 }
+
 
 //Add the velocity to the drop at index (x,y)
 void addVel(int x, int y, float2 vel) {
@@ -44,7 +48,7 @@ void addVel(int x, int y, float2 vel) {
 //Add mass to the drop at index (x, y)
 void addMass(int x, int y, float mass) {
     float4 drop = nextDataMap[int2(x, y)];
-    nextDataMap[int2(x,y)] = float4(drop.x, drop.y, drop.z + mass, drop.w);
+    nextDataMap[int2(x, y)] = float4(drop.x, drop.y, (drop.z + mass), drop.w);
 }
 
 void setPosInCell(int x, int y, float posInCell) {
@@ -52,8 +56,8 @@ void setPosInCell(int x, int y, float posInCell) {
     nextDataMap[int2(x, y)] = float4(drop.x, drop.y, drop.z, max(posInCell, drop.w));
 }
 
-[numthreads(8,8,1)]
-void DrawBlack (uint3 id : SV_DispatchThreadID){
+[numthreads(8, 8, 1)]
+void DrawBlack(uint3 id : SV_DispatchThreadID) {
     viewMap[id.xy] = float4(0, 0, 0, 1.0);
 }
 
@@ -65,7 +69,7 @@ void AddRain(uint3 id : SV_DispatchThreadID) {
 }
 
 
-[numthreads(16,16,1)]
+[numthreads(16, 16, 1)]
 void Update(uint3 id  : SV_DispatchThreadID) {
     if (id.x < 0 || id.x >= width || id.y < 0 || id.y >= height) {
         return;
@@ -78,10 +82,10 @@ void Update(uint3 id  : SV_DispatchThreadID) {
     if (m == 0) {
         return;
     }
-    
+
     float2 vel = float2(drop.x, drop.y); //momentum of drop
     float2 gravity = float2(0, m * g); //gravity
-    
+
     //friction
     float mu = noiseMap[id.xy]; //coefficient of friction
     float2 staticFriction = float2(0, 0);
@@ -89,44 +93,41 @@ void Update(uint3 id  : SV_DispatchThreadID) {
     float speed = sqrt(pow(vel.x, 2) + pow(vel.y, 2));
 
     //static friction
-    if (m * sigmoid(speed) * 0.8 <= mu) {
+    if (m * sigmoid(speed) * 2 <= mu) {
         staticFriction = float2(0, -g * m);
     }
     //dynamic friction
     else {
-        dynamicFriction = float2(0, -mu * m * g * 0.1);
+        dynamicFriction = float2(0, -mu * m * g * 0.01);
     }
-    //velocity friction force
-    if (vel.x > 0 || vel.y > 0) {
-        dynamicFriction += float2(-vel.x * mu, -vel.y * mu);
-    }
-    
 
     float2 newVel = vel + gravity + staticFriction + dynamicFriction;
 
     speed = sqrt(pow(newVel.x, 2) + pow(newVel.y, 2));
 
+    //velocity friction force
+    if (speed > 0) {
+        newVel += float2(-vel.x * mu, -vel.y * mu);
+    }
     float angle = atan2(newVel.y, newVel.x);
 
     //find node to move to
     float maxScore = -100;
     float maxX = 0, maxY = -1;
     for (int x = -1; x < 2; x++) {
-        for (int y = -1; y < 2; y++) {
+        for (int y = -1; y < 1; y++) {
             if (x == 0 && y == 0) {
                 continue;
             }
             if (id.x + x >= 0 && id.x + x < width && id.y + y >= 0 && id.y + y < height) {
                 //Bias score by least resistive path
-                float score = -noiseMap[int2(id.x + x, id.y + y)].x;
+                float score = -noiseMap[int2(id.x + x, id.y + y)].x * 0.5;
 
                 //Bias towards path with water
-                score += nextDataMap[int2(id.x + x, id.y + y)].z * 5;
+                score += dataMap[int2(id.x + x, id.y + y)].z * 5;
 
                 //Choose routes in line with momentum
-                //score -= abs(angle - atan2(y, x)) * 0.01;
-
-                score -= y*0.2;
+                score -= abs(angle - atan2(y, x))* 0.1;
 
                 if (score >= maxScore) {
                     maxScore = score;
@@ -137,45 +138,78 @@ void Update(uint3 id  : SV_DispatchThreadID) {
         }
     }
 
-
     if (m <= 0.9) {
-        m *= 0.99;
+        m *= 0.98;
     }
+
     if (m <= 0.01) {
         m = 0;
+        return;
     }
+    /*else {
+        float sum = 0;
+        float count = 0;
+        for (int offsetX = -1; offsetX <= 1; offsetX++) {
+            for (int offsetY = -1; offsetY <= 1; offsetY++) {
+                int sampleX = id.x + offsetX;
+                int sampleY = id.y + offsetY;
+                if (sampleX >= 0 && sampleX < width &&
+                    sampleY >= 0 && sampleY < height) {
+                    float mN = dataMap[int2(sampleX, sampleY)].z;
+                    if (mN > 0) {
+                        sum += mN;
+                        count += 1;
+                    }
+                }
+            }
+        }
+
+        m = m * 0.99 + (sum / count) * 0.01;
+    }*/
 
 
     posInCell += speed;
     debugVals[0] = newVel.x;
     debugVals[1] = newVel.y;
 
-    if (posInCell >= 1.0) {
+    float oldM = dataMap[int2(id.x + maxX, id.y + maxY)].z;
+    if (posInCell >= 1.0 ) {
         //set current cell
         addMass(id.x, id.y, m * 0.5);
-        addVel(id.x, id.y, float2(newVel.x*0.2, newVel.y*0.2));
-        setPosInCell(id.x, id.y, posInCell - 1.0);
+        addVel(id.x, id.y, float2(newVel.x * 0.2, newVel.y * 0.2));
 
         //Set values for next cell
-        float oldM = nextDataMap[int2(id.x + maxX, id.y + maxY)].z;
         addMass(id.x + maxX, id.y + maxY, m);
         addVel(id.x + maxX, id.y + maxY, newVel);
-        //addVel(id.x + maxX, id.y + maxY, float2(maxX * 0.01, maxY * 0.01));
-    }else {
+        setPosInCell(id.x + maxX, id.y + maxY, posInCell - 1.0);
+
+        //addVel(id.x + maxX, id.y + maxY, float2(maxX * 0.1, maxY * 0.1));
+    }
+    else {
         addMass(id.x, id.y, m);
         addVel(id.x, id.y, newVel);
         setPosInCell(id.x, id.y, posInCell);
     }
 }
 
+
 [numthreads(16, 16, 1)]
 void Draw(uint3 id  : SV_DispatchThreadID) {
     if (id.x < 0 || id.x >= width || id.y < 0 || id.y >= height) {
         return;
     }
-    
-    float a = nextDataMap[id.xy].z;
-    viewMap[id.xy] = float4(a, a, a, 1.0);
+
+    float4 bgPix = bg[id.xy];
+    float4 blurBgPix = blurBg[id.xy];
+    float m = nextDataMap[id.xy].z;
+    if (m == 0) {
+        float4 x = float4(0.1, 0.1, 0.1, 0.0);
+        float4 n = noiseMap[id.xy] * 0.05;
+        viewMap[id.xy] = blurBgPix + x + n;
+    }else {
+        m *= 0.3;
+        viewMap[id.xy] = float4(bgPix.x + m, bgPix.y + m, bgPix.z + m, 1.0);
+    }
 }
 
 [numthreads(16, 16, 1)]
@@ -187,3 +221,28 @@ void ResetMap(uint3 id  : SV_DispatchThreadID) {
     dataMap[id.xy] = float4(0, 0, 0, 0);
 }
 
+[numthreads(16, 16, 1)]
+void Blur(uint3 id  : SV_DispatchThreadID) {
+    if (id.x < 0 || id.x >= width || id.y < 0 || id.y >= height) {
+        return;
+    }
+
+    float4 originalValue = bg[id.xy];
+    float4 sum = 0;
+    for (int offsetX = -5; offsetX <= 5; offsetX++) {
+        for (int offsetY = -5; offsetY <= 5; offsetY++) {
+            int sampleX = id.x + offsetX;
+            int sampleY = id.y + offsetY;
+            if (sampleX >= 0 && sampleX < width &&
+                sampleY >= 0 && sampleY < height) {
+                sum += bg[int2(sampleX, sampleY)];
+            }
+            else {
+                sum += float4(0.0, 0.0, 0.0, 1.0);
+            }
+        }
+    }
+
+    float4 blurResult = sum / 100;
+    blurBg[id.xy] = blurResult;
+}

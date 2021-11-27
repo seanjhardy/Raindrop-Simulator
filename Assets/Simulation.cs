@@ -3,9 +3,12 @@ using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
 
-public class Simulation : MonoBehaviour {
+public class Simulation : MonoBehaviour
+{
     public GameObject canvas;
     public RawImage image;
+    public Texture2D backgroundTexture;
+    private RenderTexture bg, blurBg; 
     public ComputeShader shader;
 
     private int width;
@@ -23,7 +26,8 @@ public class Simulation : MonoBehaviour {
     private uint curTex = 0;
     private uint prevTex = 1;
 
-    struct Raindrop {
+    struct Raindrop
+    {
         public Vector2 position;
         public Vector2 velocity;
         public float mass;
@@ -32,7 +36,8 @@ public class Simulation : MonoBehaviour {
     private ComputeBuffer computeBuffer;
 
     // Start is called before the first frame update
-    void Start() {
+    void Start()
+    {
         width = 640;//640, 128
         height = 360;//360, 72
 
@@ -55,30 +60,30 @@ public class Simulation : MonoBehaviour {
         viewMap.enableRandomWrite = true;
         viewMap.Create();
         viewMap.filterMode = FilterMode.Point;
+        drawBlack();
 
         maps = new RenderTexture[2];
         maps[0] = map;
         maps[1] = map2;
 
-        image.texture = viewMap;
+        initBg();
     }
 
 
     // Update is called once per frame
-    void Update() {
+    void Update(){
         if (Time.time - lastTime >= delay){
             lastTime = Time.time;
             step += 1;
 
             prevTex = curTex;
             curTex = (curTex + 1) % numTex;
-            drawBlack();
             addRain();
             simulateStep();
             draw();
             resetPrevDataMap();
 
-            if (step % 20 == 0) {
+            if (step % 10 == 0){
                 Debug.Log(debugVals[0] + " " + debugVals[1]);
             }
 
@@ -86,22 +91,28 @@ public class Simulation : MonoBehaviour {
         }
     }
 
-    void drawBlack() {
+    void drawBlack()
+    {
         int kernelHandle = shader.FindKernel("DrawBlack");
 
         shader.SetTexture(kernelHandle, "viewMap", viewMap);
         shader.Dispatch(kernelHandle, width / 16, height / 16, 1);
     }
 
-    void draw() {
+    void draw()
+    {
         int kernelHandle = shader.FindKernel("Draw");
 
         shader.SetTexture(kernelHandle, "viewMap", viewMap);
-        shader.SetTexture(kernelHandle, "nextDataMap", maps[curTex]); 
+        shader.SetTexture(kernelHandle, "nextDataMap", maps[curTex]);
+        shader.SetTexture(kernelHandle, "noiseMap", noise);
+        shader.SetTexture(kernelHandle, "bg", bg);
+        shader.SetTexture(kernelHandle, "blurBg", blurBg);
         shader.Dispatch(kernelHandle, width / 16, height / 16, 1);
     }
 
-    void resetPrevDataMap() {
+    void resetPrevDataMap()
+    {
         int kernelHandle = shader.FindKernel("ResetMap");
 
         shader.SetTexture(kernelHandle, "dataMap", maps[prevTex]);
@@ -109,47 +120,59 @@ public class Simulation : MonoBehaviour {
     }
 
 
-    void addRain() {
+    void addRain()
+    {
         int kernelHandle = shader.FindKernel("AddRain");
         shader.SetFloat("deltaTime", Time.deltaTime);
 
-        int numDrops = 2;
-        Raindrop[] rain = new Raindrop[numDrops];
+        int numDrops = 1;
+        int maxSize = 2;
+        int dropSize = (int)Mathf.Pow(maxSize, 2);
+        Raindrop[] rain = new Raindrop[numDrops*dropSize];
 
-        float rainAngle = -Mathf.PI/2.0f;// (float)(Mathf.PI * 0.5f + Mathf.Sin(step * 0.05f) / 8.0f);
+        float rainAngle = (float)(-Mathf.PI * 0.5f + Mathf.Sin(step * 0.005f) / 8.0f);
 
-        for (int i = 0; i < numDrops; i++) {
-            Raindrop drop = new Raindrop();
-            float x = Random.Range(1, width);
-            float y = Random.Range(1, height);
-            drop.position = new Vector2(x, y);
-
-            float speed = Random.Range(1, 10)*0.2f;
+        for (int i = 0; i < numDrops; i++)
+        {
+            int size = Random.Range(1, maxSize + 1);
+            float X = Random.Range(1, width);
+            float Y = Random.Range(1, height);
+            float speed = Random.Range(1, 10) * 0.1f;
             float xVel = Mathf.Cos(rainAngle) * speed;
             float yVel = Mathf.Sin(rainAngle) * speed;
+            float mass = Random.Range(1, 20)*0.1f;
 
-            drop.velocity = new Vector2(xVel, yVel);
-            drop.mass = 1.0f;
-            rain[i] = drop;
+            for (int x = 0; x < size; x++) {
+                for (int y = 0; y < size; y++) {
+                    Raindrop drop = new Raindrop();
+                    drop.position = new Vector2((float)x + X, (float)y + Y);
+                    drop.velocity = new Vector2(xVel, yVel);
+                    drop.mass = mass;
+                    rain[i * dropSize + x* size + y] = drop;
+                }
+            }
         }
 
         //set rain list
-        computeBuffer = new ComputeBuffer(numDrops, sizeof(float) * 5);
+        computeBuffer = new ComputeBuffer(numDrops * dropSize, sizeof(float) * 5);
         shader.SetTexture(kernelHandle, "dataMap", maps[prevTex]);
         computeBuffer.SetData(rain);
         shader.SetBuffer(kernelHandle, "rain", computeBuffer);
-        shader.Dispatch(kernelHandle, numDrops, 1, 1);
+        shader.Dispatch(kernelHandle, numDrops * dropSize, 1, 1);
         computeBuffer.Release();
     }
 
-    void simulateStep() {
+    void simulateStep()
+    {
         int kernelHandle = shader.FindKernel("Update");
         shader.SetFloat("deltaTime", Time.deltaTime);
 
+        shader.SetInt("step", step);
         shader.SetTexture(kernelHandle, "dataMap", maps[prevTex]);
         shader.SetTexture(kernelHandle, "nextDataMap", maps[curTex]);
         shader.SetTexture(kernelHandle, "viewMap", viewMap);
         shader.SetTexture(kernelHandle, "noiseMap", noise);
+
         computeBuffer = new ComputeBuffer(debugVals.Length, sizeof(float));
         computeBuffer.SetData(debugVals);
         shader.SetBuffer(kernelHandle, "debugVals", computeBuffer);
@@ -159,9 +182,12 @@ public class Simulation : MonoBehaviour {
         computeBuffer.Release();
     }
 
-    void generateNoise() {
-        float[] octaveFrequencies = new float[] { 0.01f, 0.05f, 0.2f, 2f, 5f };
-        float[] octaveAmplitudes = new float[] { 2.0f,  1.0f, 0.6f, 0.4f, 0.2f };
+    void generateNoise()
+    {
+        //float[] octaveFrequencies = new float[] { 0.01f, 0.05f, 0.2f, 2f, 5f };
+        //float[] octaveAmplitudes = new float[] { 2.0f, 1.0f, 0.6f, 0.4f, 0.2f };
+        float[] octaveFrequencies = new float[] { 0.2f, 2f, 5f, 8f };
+        float[] octaveAmplitudes = new float[] { 0.1f, 0.2f, 0.2f, 0.2f };
 
         Texture2D noiseTex = new Texture2D(width, height);
 
@@ -169,13 +195,15 @@ public class Simulation : MonoBehaviour {
         Color[] tex = noiseTex.GetPixels();
         float max = 0;
         float min = 10;
-        for (var i = 0; i < tex.Length; ++i){
+        for (var i = 0; i < tex.Length; ++i)
+        {
             tex[i] = fillColor;
 
             int x = i % width;
             int y = i / width;
 
-            for (int j = 0; j < octaveFrequencies.Length; j++){
+            for (int j = 0; j < octaveFrequencies.Length; j++)
+            {
                 float z = octaveAmplitudes[j] * Mathf.PerlinNoise(
                         octaveFrequencies[j] * x + .3f,
                         octaveFrequencies[j] * y + .3f) * 0.5f;
@@ -188,7 +216,8 @@ public class Simulation : MonoBehaviour {
             min = Mathf.Min(min, tex[i].r);
         }
 
-        for (var i = 0; i < tex.Length; ++i){
+        for (var i = 0; i < tex.Length; ++i)
+        {
             float c = (tex[i].r - min) * (1.0f / (max - min));
             tex[i] = new Color(c, c, c, 1.0f);
         }
@@ -204,5 +233,28 @@ public class Simulation : MonoBehaviour {
         RenderTexture.active = noise;
         // Copy your texture ref to the render texture
         Graphics.Blit(noiseTex, noise);
+    }
+
+
+    public void initBg() {
+        bg = new RenderTexture(width, height, 24);
+        bg.enableRandomWrite = true;
+        bg.Create();
+        bg.filterMode = FilterMode.Point;
+        RenderTexture.active = bg;
+
+        Graphics.Blit(backgroundTexture, bg);
+
+        blurBg = new RenderTexture(width, height, 24);
+        blurBg.enableRandomWrite = true;
+        blurBg.Create();
+        blurBg.filterMode = FilterMode.Point;
+
+        int kernelHandle = shader.FindKernel("Blur");
+
+        shader.SetTexture(kernelHandle, "blurBg", blurBg);
+        shader.SetTexture(kernelHandle, "bg", bg);
+
+        shader.Dispatch(kernelHandle, width / 16, height / 16, 1);
     }
 }
